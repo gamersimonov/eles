@@ -1,7 +1,7 @@
 const mineflayer = require('mineflayer');
 const express = require('express');
 const app = express();
-const PORT = process.env.PORT || 8080; 
+const PORT = process.env.PORT || 8080;
 
 // --- CONFIGURATION ---
 const CONFIG = {
@@ -12,33 +12,35 @@ const CONFIG = {
   version: '1.20.1',
   lobbyItem: 'nether_star',
   realmItem: 'lime_dye',
-  balanceInterval: 1800000 // Check every 30 minutes (1,800,000 ms)
+  balanceInterval: 1800000 // 30 minutes
 };
 
 let bot;
-let botStatus = "Initializing";
-let currentBalance = "Checking...";
+let botStatus = "Offline";
+let currentBalance = "0 Shards";
 let webLogs = [];
 let reconnectTimer;
 let balanceTimer;
 
-// --- LOGGING ---
+// --- LOGGING & FILTERING ---
 function addLog(type, message) {
   const time = new Date().toLocaleTimeString('en-GB', { timeZone: 'Asia/Jakarta' });
-  const cleanMsg = message.replace(/§[0-9a-fk-or]/g, ''); 
+  const cleanMsg = message.replace(/§[0-9a-fk-or]/g, '').trim();
   
-  let formattedMsg = "";
-  if (type === 'SYSTEM') formattedMsg = `<span style="color: #ffca28">[SYS] ${cleanMsg}</span>`;
-  else if (type === 'CHAT') formattedMsg = `<span style="color: #00ff41">${cleanMsg}</span>`;
-  else if (type === 'ERROR') formattedMsg = `<span style="color: #ff5555">[ERR] ${cleanMsg}</span>`;
-  else if (type === 'ECONOMY') formattedMsg = `<span style="color: #34d399; font-weight: bold;">[ECONOMY] ${cleanMsg}</span>`;
+  let color = "#e2e8f0"; // Default
+  if (type === 'SYSTEM') color = "#ffca28";
+  else if (type === 'CHAT') color = "#00ff41";
+  else if (type === 'ECONOMY') color = "#34d399";
+  else if (type === 'ERROR') color = "#ff5555";
 
-  webLogs.unshift(`[${time}] ${formattedMsg}`);
-  if (webLogs.length > 300) webLogs.pop(); 
-  console.log(`[${time}] [${type}] ${cleanMsg}`); 
+  const entry = `<span style="color: ${color}">[${time}] [${type}] ${cleanMsg}</span>`;
+  webLogs.unshift(entry);
+  if (webLogs.length > 200) webLogs.pop();
+  
+  console.log(`[${time}] [${type}] ${cleanMsg}`);
 }
 
-// --- BOT LOGIC ---
+// --- BOT CORE ---
 function createBot() {
   if (reconnectTimer) clearTimeout(reconnectTimer);
   if (balanceTimer) clearInterval(balanceTimer);
@@ -56,92 +58,87 @@ function createBot() {
     const msg = json.toString();
     const cleanMsg = msg.replace(/§[0-9a-fk-or]/g, '');
     const lowerMsg = cleanMsg.toLowerCase();
-    
-    // 1. CHAT FILTER
-    const isChat = cleanMsg.includes(':') || cleanMsg.includes('»') || cleanMsg.includes('->') || lowerMsg.includes('welcome') || lowerMsg.includes('has joined');
-    const isStatBar = cleanMsg.includes('❤') || cleanMsg.includes('⌚') || cleanMsg.includes('|');
 
-    // 2. BALANCE CATCHER
-    // If message has "shard", a number, and isn't a standard player chat (prevents players spoofing it)
-    if (lowerMsg.includes('shard') && /\d/.test(lowerMsg) && !cleanMsg.includes(':') && !isStatBar) {
-       currentBalance = cleanMsg.trim(); // Save the exact server text
-       addLog('ECONOMY', currentBalance);
+    // 1. STAT BAR BLOCKER
+    if (cleanMsg.includes('❤') || cleanMsg.includes('⌚') || cleanMsg.includes('|')) return;
+
+    // 2. SMART BALANCE CATCHER (Avoids "Next Shard" spam)
+    if (lowerMsg.includes('current balance') && lowerMsg.includes('shard')) {
+      const match = cleanMsg.match(/\d+(?:,\d+)*/); // Catches numbers like 588 or 1,000
+      if (match) {
+        currentBalance = `${match[0]} Shards`;
+        addLog('ECONOMY', `Balance Updated: ${currentBalance}`);
+      }
     } 
-    // Otherwise, handle regular chat
-    else if (isChat && !isStatBar) {
-      addLog('CHAT', cleanMsg);
+
+    // 3. CLEAN CHAT FILTER
+    else {
+      const isPlayerChat = cleanMsg.includes(':') || cleanMsg.includes('»') || cleanMsg.includes('->');
+      const isImportant = lowerMsg.includes('welcome') || lowerMsg.includes('joined the');
+      
+      if (isPlayerChat || isImportant) {
+        addLog('CHAT', cleanMsg);
+      }
     }
   });
 
   bot.once('spawn', () => {
-    botStatus = "Authenticating";
-    addLog('SYSTEM', 'Bot spawned. Waiting to login...');
+    botStatus = "Authenticating...";
+    addLog('SYSTEM', 'Spawned in lobby.');
     
     setTimeout(() => {
       bot.chat(`/login ${CONFIG.password}`);
-      addLog('SYSTEM', 'Login credentials sent.');
       startNavigation();
-      startBalanceChecker();
+      startBalanceLoop();
     }, 5000);
   });
 
   bot.on('end', (reason) => {
-    botStatus = `Offline (${reason})`;
-    currentBalance = "Offline";
+    botStatus = "Offline (Reconnecting)";
     addLog('ERROR', `Disconnected: ${reason}`);
-    reconnectTimer = setTimeout(createBot, 30000); 
+    reconnectTimer = setTimeout(createBot, 30000);
   });
 
   bot.on('error', (err) => addLog('ERROR', err.message));
 }
 
-function startBalanceChecker() {
-  // Wait 15 seconds after login to ask for the first balance check
-  setTimeout(() => checkBalance(), 15000);
-  
-  // Then check automatically every 30 minutes
-  balanceTimer = setInterval(() => checkBalance(), CONFIG.balanceInterval);
+// --- AUTOMATION ---
+function startBalanceLoop() {
+  setTimeout(() => requestBalance(), 10000); // Initial check
+  balanceTimer = setInterval(requestBalance, CONFIG.balanceInterval);
 }
 
-function checkBalance() {
+function requestBalance() {
   if (bot && bot.entity) {
     bot.chat('/shard balance');
-    addLog('SYSTEM', 'Requested /shard balance from server.');
+    addLog('SYSTEM', 'Fetching balance...');
   }
 }
 
 function startNavigation() {
-  botStatus = "Navigating to Realm...";
-  const loop = setInterval(() => {
-    if (!bot || !bot.entity) return clearInterval(loop);
+  botStatus = "Navigating...";
+  const navInterval = setInterval(() => {
+    if (!bot || !bot.entity) return clearInterval(navInterval);
 
     const items = bot.inventory.slots.slice(36, 45);
-    const selector = items.find(i => i && i.name.includes(CONFIG.lobbyItem));
+    const star = items.find(i => i && i.name.includes(CONFIG.lobbyItem));
 
-    if (selector) {
-      bot.setQuickBarSlot(bot.inventory.slots.indexOf(selector) - 36);
+    if (star) {
+      bot.setQuickBarSlot(bot.inventory.slots.indexOf(star) - 36);
       bot.activateItem();
-      addLog('SYSTEM', 'Opened Realm Selector.');
-      clearInterval(loop);
+      clearInterval(navInterval);
 
       bot.once('windowOpen', async (window) => {
-        await new Promise(r => setTimeout(r, 2000)); 
-        const realmIcon = window.slots.find(i => i && i.name.includes(CONFIG.realmItem));
+        await new Promise(r => setTimeout(r, 2000));
+        const dye = window.slots.find(i => i && i.name.includes(CONFIG.realmItem));
         
-        if (realmIcon) {
-          await bot.clickWindow(realmIcon.slot, 0, 0);
-          botStatus = "Joining Realm...";
-          addLog('SYSTEM', 'Clicked Lime Dye. Waiting for teleport...');
-          
+        if (dye) {
+          await bot.clickWindow(dye.slot, 0, 0);
+          addLog('SYSTEM', 'Joining DonutSMP...');
           setTimeout(() => {
             bot.chat('/afk');
-            botStatus = "AFK in Realm";
-            addLog('SYSTEM', '/afk sent successfully.');
+            botStatus = "In-Game (AFK)";
           }, 8000);
-        } else {
-          addLog('ERROR', 'Could not find Lime Dye! Retrying...');
-          bot.closeWindow(window);
-          startNavigation();
         }
       });
     }
@@ -150,62 +147,53 @@ function startNavigation() {
 
 createBot();
 
-// --- WEB DASHBOARD ---
+// --- DASHBOARD UI ---
 app.get('/', (req, res) => {
   res.send(`
     <html>
       <head>
-        <title>Theo's Vault</title>
+        <title>Theo Control</title>
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <style>
-          body { background: #0f172a; color: #e2e8f0; font-family: 'Segoe UI', sans-serif; padding: 20px; margin: 0; }
-          .container { max-width: 800px; margin: 0 auto; }
-          .header-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 20px; }
-          .card { background: #1e293b; padding: 20px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
-          .card h3 { margin: 0 0 10px 0; color: #94a3b8; font-size: 14px; text-transform: uppercase; letter-spacing: 1px; }
-          .status { font-weight: bold; color: #3b82f6; font-size: 1.2em; }
-          .balance { font-weight: bold; color: #34d399; font-size: 1.2em; }
-          #logs { background: #020617; height: 50vh; overflow-y: auto; padding: 15px; border-radius: 8px; font-family: monospace; font-size: 14px; margin-bottom: 20px; border: 1px solid #334155; }
-          .chat-box { display: flex; gap: 10px; }
-          input { flex: 1; padding: 15px; background: #1e293b; border: 1px solid #334155; color: white; border-radius: 8px; outline: none; }
-          button { padding: 15px 25px; background: #3b82f6; color: white; border: none; border-radius: 8px; font-weight: bold; cursor: pointer; }
-          button:hover { background: #2563eb; }
-          .btn-secondary { background: #475569; }
-          .btn-secondary:hover { background: #334155; }
+          body { background: #020617; color: #f8fafc; font-family: system-ui; padding: 20px; }
+          .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 20px; }
+          .card { background: #1e293b; padding: 15px; border-radius: 12px; border: 1px solid #334155; }
+          .label { color: #94a3b8; font-size: 12px; text-transform: uppercase; font-weight: bold; }
+          .val { font-size: 1.2rem; font-weight: bold; margin-top: 5px; }
+          #logs { background: #000; height: 60vh; overflow-y: auto; padding: 15px; border-radius: 12px; font-family: monospace; font-size: 13px; line-height: 1.6; border: 1px solid #334155; }
+          .input-bar { display: flex; gap: 10px; margin-top: 20px; }
+          input { flex: 1; padding: 12px; border-radius: 8px; border: 1px solid #334155; background: #0f172a; color: white; outline: none; }
+          button { padding: 12px 20px; border-radius: 8px; border: none; background: #3b82f6; color: white; font-weight: bold; cursor: pointer; }
+          .btn-shard { background: #10b981; }
         </style>
       </head>
       <body>
-        <div class="container">
-          <div class="header-grid">
-            <div class="card" style="border-left: 4px solid #3b82f6;">
-              <h3>🤖 Bot Status</h3>
-              <div id="status" class="status">${botStatus}</div>
-            </div>
-            <div class="card" style="border-left: 4px solid #34d399;">
-              <h3>💎 Shard Wealth</h3>
-              <div id="balance" class="balance">${currentBalance}</div>
-            </div>
+        <div class="grid">
+          <div class="card">
+            <div class="label">Bot Status</div>
+            <div class="val" id="st" style="color:#3b82f6">${botStatus}</div>
           </div>
-          
-          <div id="logs">${webLogs.join('<br>')}</div>
-          
-          <div class="chat-box">
-            <input type="text" id="msg" placeholder="Type a command or chat message..." onkeypress="if(event.key === 'Enter') send()">
-            <button onclick="send()">Send</button>
-            <button class="btn-secondary" onclick="fetch('/force-balance')">Update Shards</button>
+          <div class="card">
+            <div class="label">Wealth</div>
+            <div class="val" id="bl" style="color:#10b981">${currentBalance}</div>
           </div>
         </div>
+        <div id="logs">${webLogs.join('<br>')}</div>
+        <div class="input-bar">
+          <input type="text" id="m" placeholder="Message or Command..." onkeypress="if(event.key==='Enter')send()">
+          <button onclick="send()">Send</button>
+          <button class="btn-shard" onclick="fetch('/force-bal')">Check Shards</button>
+        </div>
         <script>
-          function send() {
-            const i = document.getElementById('msg');
-            if(!i.value) return;
-            fetch('/chat?msg=' + encodeURIComponent(i.value));
-            i.value = '';
+          function send(){
+            const i = document.getElementById('m');
+            fetch('/chat?msg='+encodeURIComponent(i.value));
+            i.value='';
           }
-          setInterval(() => {
-            fetch('/data').then(r => r.json()).then(d => {
-              document.getElementById('status').innerText = d.status;
-              document.getElementById('balance').innerText = d.balance;
+          setInterval(()=> {
+            fetch('/data').then(r=>r.json()).then(d=>{
+              document.getElementById('st').innerText = d.status;
+              document.getElementById('bl').innerText = d.balance;
               document.getElementById('logs').innerHTML = d.logs.join('<br>');
             });
           }, 2000);
@@ -216,8 +204,8 @@ app.get('/', (req, res) => {
 });
 
 app.get('/data', (req, res) => res.json({ status: botStatus, balance: currentBalance, logs: webLogs }));
-app.get('/chat', (req, res) => { if (bot && bot.entity) bot.chat(req.query.msg); res.sendStatus(200); });
-app.get('/force-balance', (req, res) => { checkBalance(); res.sendStatus(200); });
+app.get('/chat', (req, res) => { if(bot) bot.chat(req.query.msg); res.sendStatus(200); });
+app.get('/force-bal', (req, res) => { requestBalance(); res.sendStatus(200); });
 
-app.listen(PORT, () => console.log(`Dashboard active on port ${PORT}`));
+app.listen(PORT);
 
