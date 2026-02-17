@@ -22,16 +22,16 @@ let webLogs = [];
 let reconnectTimer;
 let balanceTimer;
 
-// --- LOGGING & FILTERING ---
+// --- LOGGING ---
 function addLog(type, message) {
   const time = new Date().toLocaleTimeString('en-GB', { timeZone: 'Asia/Jakarta' });
   const cleanMsg = message.replace(/§[0-9a-fk-or]/g, '').trim();
   
-  let color = "#e2e8f0"; // Default
-  if (type === 'SYSTEM') color = "#ffca28";
-  else if (type === 'CHAT') color = "#00ff41";
-  else if (type === 'ECONOMY') color = "#34d399";
-  else if (type === 'ERROR') color = "#ff5555";
+  let color = "#f8fafc"; 
+  if (type === 'SYSTEM') color = "#fbbf24";  // Yellow
+  if (type === 'CHAT') color = "#4ade80";    // Green
+  if (type === 'ECONOMY') color = "#2dd4bf"; // Teal
+  if (type === 'ERROR') color = "#f87171";   // Red
 
   const entry = `<span style="color: ${color}">[${time}] [${type}] ${cleanMsg}</span>`;
   webLogs.unshift(entry);
@@ -62,19 +62,20 @@ function createBot() {
     // 1. STAT BAR BLOCKER
     if (cleanMsg.includes('❤') || cleanMsg.includes('⌚') || cleanMsg.includes('|')) return;
 
-    // 2. SMART BALANCE CATCHER (Avoids "Next Shard" spam)
+    // 2. REFINED BALANCE CATCHER (Supports 1,250.5k format)
     if (lowerMsg.includes('current balance') && lowerMsg.includes('shard')) {
-      const match = cleanMsg.match(/\d+(?:,\d+)*/); // Catches numbers like 588 or 1,000
+      // Logic: Look for any sequence of numbers, commas, and dots ending optionally in K/M/B
+      const match = cleanMsg.match(/[\d,.]+[kmbKMB]?/); 
       if (match) {
         currentBalance = `${match[0]} Shards`;
-        addLog('ECONOMY', `Balance Updated: ${currentBalance}`);
+        addLog('ECONOMY', `💰 Wealth Updated: ${currentBalance}`);
       }
     } 
 
     // 3. CLEAN CHAT FILTER
     else {
       const isPlayerChat = cleanMsg.includes(':') || cleanMsg.includes('»') || cleanMsg.includes('->');
-      const isImportant = lowerMsg.includes('welcome') || lowerMsg.includes('joined the');
+      const isImportant = lowerMsg.includes('welcome') || lowerMsg.includes('joined the') || lowerMsg.includes('teleport');
       
       if (isPlayerChat || isImportant) {
         addLog('CHAT', cleanMsg);
@@ -84,7 +85,7 @@ function createBot() {
 
   bot.once('spawn', () => {
     botStatus = "Authenticating...";
-    addLog('SYSTEM', 'Spawned in lobby.');
+    addLog('SYSTEM', 'Spawned in lobby. Preparing login...');
     
     setTimeout(() => {
       bot.chat(`/login ${CONFIG.password}`);
@@ -104,14 +105,14 @@ function createBot() {
 
 // --- AUTOMATION ---
 function startBalanceLoop() {
-  setTimeout(() => requestBalance(), 10000); // Initial check
+  setTimeout(() => requestBalance(), 10000); 
   balanceTimer = setInterval(requestBalance, CONFIG.balanceInterval);
 }
 
 function requestBalance() {
   if (bot && bot.entity) {
     bot.chat('/shard balance');
-    addLog('SYSTEM', 'Fetching balance...');
+    addLog('SYSTEM', 'Polling server for balance...');
   }
 }
 
@@ -134,10 +135,10 @@ function startNavigation() {
         
         if (dye) {
           await bot.clickWindow(dye.slot, 0, 0);
-          addLog('SYSTEM', 'Joining DonutSMP...');
+          addLog('SYSTEM', 'Selected Realm: DonutSMP');
           setTimeout(() => {
             bot.chat('/afk');
-            botStatus = "In-Game (AFK)";
+            botStatus = "In-Game (AFK Mode)";
           }, 8000);
         }
       });
@@ -152,41 +153,43 @@ app.get('/', (req, res) => {
   res.send(`
     <html>
       <head>
-        <title>Theo Control</title>
+        <title>Theo_not_bald Control</title>
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <style>
-          body { background: #020617; color: #f8fafc; font-family: system-ui; padding: 20px; }
+          body { background: #020617; color: #f8fafc; font-family: 'Inter', sans-serif; padding: 20px; }
           .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 20px; }
-          .card { background: #1e293b; padding: 15px; border-radius: 12px; border: 1px solid #334155; }
-          .label { color: #94a3b8; font-size: 12px; text-transform: uppercase; font-weight: bold; }
-          .val { font-size: 1.2rem; font-weight: bold; margin-top: 5px; }
-          #logs { background: #000; height: 60vh; overflow-y: auto; padding: 15px; border-radius: 12px; font-family: monospace; font-size: 13px; line-height: 1.6; border: 1px solid #334155; }
+          .card { background: #1e293b; padding: 15px; border-radius: 12px; border: 1px solid #334155; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); }
+          .label { color: #94a3b8; font-size: 11px; text-transform: uppercase; font-weight: 800; letter-spacing: 0.05em; }
+          .val { font-size: 1.3rem; font-weight: bold; margin-top: 8px; }
+          #logs { background: #000; height: 60vh; overflow-y: auto; padding: 15px; border-radius: 12px; font-family: 'Fira Code', monospace; font-size: 13px; line-height: 1.6; border: 1px solid #334155; }
           .input-bar { display: flex; gap: 10px; margin-top: 20px; }
           input { flex: 1; padding: 12px; border-radius: 8px; border: 1px solid #334155; background: #0f172a; color: white; outline: none; }
-          button { padding: 12px 20px; border-radius: 8px; border: none; background: #3b82f6; color: white; font-weight: bold; cursor: pointer; }
-          .btn-shard { background: #10b981; }
+          button { padding: 12px 20px; border-radius: 8px; border: none; background: #3b82f6; color: white; font-weight: bold; cursor: pointer; transition: 0.2s; }
+          button:hover { opacity: 0.8; }
+          .btn-shard { background: #14b8a6; }
         </style>
       </head>
       <body>
         <div class="grid">
-          <div class="card">
-            <div class="label">Bot Status</div>
-            <div class="val" id="st" style="color:#3b82f6">${botStatus}</div>
+          <div class="card" style="border-top: 4px solid #3b82f6;">
+            <div class="label">System Status</div>
+            <div class="val" id="st" style="color:#60a5fa">${botStatus}</div>
           </div>
-          <div class="card">
-            <div class="label">Wealth</div>
-            <div class="val" id="bl" style="color:#10b981">${currentBalance}</div>
+          <div class="card" style="border-top: 4px solid #14b8a6;">
+            <div class="label">Total Wealth</div>
+            <div class="val" id="bl" style="color:#2dd4bf">${currentBalance}</div>
           </div>
         </div>
         <div id="logs">${webLogs.join('<br>')}</div>
         <div class="input-bar">
-          <input type="text" id="m" placeholder="Message or Command..." onkeypress="if(event.key==='Enter')send()">
+          <input type="text" id="m" placeholder="Type command or chat..." onkeypress="if(event.key==='Enter')send()">
           <button onclick="send()">Send</button>
-          <button class="btn-shard" onclick="fetch('/force-bal')">Check Shards</button>
+          <button class="btn-shard" onclick="fetch('/force-bal')">Refresh Shards</button>
         </div>
         <script>
           function send(){
             const i = document.getElementById('m');
+            if(!i.value) return;
             fetch('/chat?msg='+encodeURIComponent(i.value));
             i.value='';
           }
@@ -207,5 +210,5 @@ app.get('/data', (req, res) => res.json({ status: botStatus, balance: currentBal
 app.get('/chat', (req, res) => { if(bot) bot.chat(req.query.msg); res.sendStatus(200); });
 app.get('/force-bal', (req, res) => { requestBalance(); res.sendStatus(200); });
 
-app.listen(PORT);
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
 
