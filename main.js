@@ -3,27 +3,38 @@ const express = require('express');
 const app = express();
 const PORT = process.env.PORT || 8080;
 
-// --- CONFIGURATION ---
-const CONFIG = {
+// --- MULTI-ACCOUNT CONFIG ---
+// Add as many accounts as you want here
+const ACCOUNTS = [
+  { username: 'Theo_not_bald', password: 'atk.exe', enabled: true },
+  { username: 'uraa_1945', password: 'ussr45'}
+  // { username: 'Second_Account', password: 'password123', enabled: true }
+];
+
+const SETTINGS = {
   host: 'play.kampungeles.id',
   port: 25565,
-  username: 'Theo_not_bald',
-  password: 'atk.exe',
   version: '1.20.1',
   lobbyItem: 'nether_star',
   realmItem: 'lime_dye',
-  tpaTarget: 'simonov41',
-  confirmItem: 'lime_stained_glass_pane'
+  confirmItem: 'lime_stained_glass_pane',
+  tpaTarget: 'simonov41'
 };
 
-let bot;
-let botStatus = "Offline";
-let currentBalance = "0 Shards";
-let webLogs = [];
-let reconnectTimer;
-let botEnabled = true;
+const bots = {}; // Stores active mineflayer instances
+const botData = {}; // Stores status, balance, and logs for each bot
 
-function addLog(type, message) {
+// --- INITIALIZE DATA ---
+ACCOUNTS.forEach(acc => {
+  botData[acc.username] = {
+    status: "Initializing",
+    balance: "0 Shards",
+    logs: [],
+    enabled: acc.enabled
+  };
+});
+
+function addLog(user, type, message) {
   const time = new Date().toLocaleTimeString('en-GB', { timeZone: 'Asia/Jakarta' });
   const cleanMsg = message.replace(/§[0-9a-fk-or]/g, '').trim();
   let color = "#f8fafc"; 
@@ -32,47 +43,27 @@ function addLog(type, message) {
   if (type === 'ECONOMY') color = "#2dd4bf";
   if (type === 'ERROR') color = "#f87171";
 
-  webLogs.unshift(`<span style="color: ${color}">[${time}] [${type}] ${cleanMsg}</span>`);
-  if (webLogs.length > 150) webLogs.pop();
-  console.log(`[${time}] [${type}] ${cleanMsg}`);
+  const entry = `<span style="color: ${color}">[${time}] [${type}] ${cleanMsg}</span>`;
+  botData[user].logs.unshift(entry);
+  if (botData[user].logs.length > 100) botData[user].logs.pop();
+  console.log(`[${user}] [${type}] ${cleanMsg}`);
 }
 
-// --- SCOREBOARD PARSER ---
-function updateBalanceFromScoreboard() {
-  if (!bot || !bot.scoreboards) return;
+// --- BOT LOGIC FUNCTION ---
+function startBot(account) {
+  const user = account.username;
+  if (!botData[user].enabled) return;
 
-  // Look for the sidebar scoreboard
-  const sidebar = bot.scoreboards['sidebar'] || Object.values(bot.scoreboards)[0];
-  if (!sidebar) return;
-
-  // Get lines, sorted by score descending (top to bottom)
-  const lines = Object.values(sidebar.itemsMap).sort((a, b) => b.score - a.score);
-  
-  // Line 4 (Index 3 in JS)
-  const line4 = lines[3];
-  if (line4) {
-    const rawText = line4.displayName.toString();
-    const cleanText = rawText.replace(/§[0-9a-fk-or]/g, '').trim();
-    
-    // Only update if it actually contains info (prevents flickering)
-    if (cleanText.length > 1 && cleanText !== currentBalance) {
-      currentBalance = cleanText;
-    }
-  }
-}
-
-function createBot() {
-  if (!botEnabled) return;
-  if (reconnectTimer) clearTimeout(reconnectTimer);
-
-  botStatus = "Connecting...";
-  bot = mineflayer.createBot({
-    host: CONFIG.host,
-    port: CONFIG.port,
-    username: CONFIG.username,
-    version: CONFIG.version,
+  addLog(user, 'SYSTEM', 'Starting bot...');
+  const bot = mineflayer.createBot({
+    host: SETTINGS.host,
+    port: SETTINGS.port,
+    username: user,
+    version: SETTINGS.version,
     auth: 'offline'
   });
+
+  bots[user] = bot;
 
   bot.on('message', (json) => {
     const msg = json.toString();
@@ -80,119 +71,122 @@ function createBot() {
     if (cleanMsg.includes('❤') || cleanMsg.includes('⌚') || cleanMsg.includes('|')) return;
 
     const isChat = cleanMsg.includes(':') || cleanMsg.includes('»') || cleanMsg.includes('->');
-    if (isChat || cleanMsg.toLowerCase().includes('welcome')) addLog('CHAT', cleanMsg);
+    if (isChat || cleanMsg.toLowerCase().includes('welcome')) {
+        addLog(user, 'CHAT', cleanMsg);
+    }
   });
 
   bot.once('spawn', () => {
-    botStatus = "Authenticating...";
-    addLog('SYSTEM', 'Spawned. Logging in...');
-    setTimeout(() => { if(bot) bot.chat(`/login ${CONFIG.password}`); }, 5000);
+    botData[user].status = "Logging in...";
+    setTimeout(() => {
+      if (bots[user]) bots[user].chat(`/login ${account.password}`);
+    }, 5000);
     
-    // Start the scoreboard poller
-    setInterval(updateBalanceFromScoreboard, 2000);
+    // Scoreboard Tracker
+    setInterval(() => {
+      if (!bots[user] || !bots[user].scoreboards) return;
+      const sb = bots[user].scoreboards['sidebar'] || Object.values(bots[user].scoreboards)[0];
+      if (!sb) return;
+      const lines = Object.values(sb.itemsMap).sort((a, b) => b.score - a.score);
+      if (lines[3]) {
+        botData[user].balance = lines[3].displayName.toString().replace(/§[0-9a-fk-or]/g, '').trim();
+      }
+    }, 3000);
   });
 
   bot.on('end', (reason) => {
-    if (botEnabled) {
-      botStatus = "Offline (Reconnecting)";
-      addLog('ERROR', `Disconnected: ${reason}`);
-      reconnectTimer = setTimeout(createBot, 15000);
+    if (botData[user].enabled) {
+      botData[user].status = "Offline (Retrying)";
+      setTimeout(() => startBot(account), 15000);
     } else {
-      botStatus = "PAUSED (Manual Mode)";
+      botData[user].status = "PAUSED";
     }
   });
 
   bot.on('windowOpen', async (window) => {
-    const confirmSlot = window.slots.find(i => i && i.name === CONFIG.confirmItem);
-    if (confirmSlot) {
-      addLog('SYSTEM', 'TPA Menu: Confirming...');
+    const confirm = window.slots.find(i => i && i.name === SETTINGS.confirmItem);
+    if (confirm) {
       await new Promise(r => setTimeout(r, 1200));
-      if(bot) bot.clickWindow(confirmSlot.slot, 0, 0);
+      if (bots[user]) bots[user].clickWindow(confirm.slot, 0, 0);
+      addLog(user, 'SYSTEM', 'Auto-confirmed GUI.');
     }
   });
+
+  // Lobby Watchdog
+  setInterval(() => {
+    if (!bots[user] || !bots[user].entity || !botData[user].enabled) return;
+    const star = bots[user].inventory.slots.slice(36, 45).find(i => i && i.name.includes(SETTINGS.lobbyItem));
+    if (star) {
+      botData[user].status = "In Lobby";
+      const slot = bots[user].inventory.slots.indexOf(star) - 36;
+      bots[user].setQuickBarSlot(slot);
+      bots[user].activateItem();
+      bots[user].once('windowOpen', async (win) => {
+        await new Promise(r => setTimeout(r, 2000));
+        const realm = win.slots.find(i => i && i.name.includes(SETTINGS.realmItem));
+        if (realm) {
+          await bots[user].clickWindow(realm.slot, 0, 0);
+          setTimeout(() => { if(bots[user]) bots[user].chat('/afk'); }, 8000);
+        }
+      });
+    } else {
+      botData[user].status = "In-Game";
+    }
+  }, 10000);
 }
 
-// --- LOBBY WATCHDOG ---
-setInterval(() => {
-  if (!bot || !bot.entity || !botEnabled) return;
-  const hotbar = bot.inventory.slots.slice(36, 45);
-  const star = hotbar.find(i => i && i.name.includes(CONFIG.lobbyItem));
-  if (star) {
-    botStatus = "In Lobby";
-    handleLobbyJoin(star);
-  } else if (botStatus === "In Lobby") {
-    botStatus = "In-Game (AFK)";
-  }
-}, 10000);
+// Start all enabled accounts
+ACCOUNTS.forEach(acc => startBot(acc));
 
-async function handleLobbyJoin(starItem) {
-  try {
-    const slot = bot.inventory.slots.indexOf(starItem) - 36;
-    bot.setQuickBarSlot(slot);
-    bot.activateItem();
-    bot.once('windowOpen', async (window) => {
-      await new Promise(r => setTimeout(r, 2000));
-      const realm = window.slots.find(i => i && i.name.includes(CONFIG.realmItem));
-      if (realm) {
-        await bot.clickWindow(realm.slot, 0, 0);
-        addLog('SYSTEM', 'Lobby detected: Re-entering realm...');
-        setTimeout(() => { if(bot) bot.chat('/afk'); }, 8000);
-      }
-    });
-  } catch (e) {}
-}
-
-createBot();
-
-// --- WEB DASHBOARD ---
+// --- DASHBOARD ---
 app.get('/', (req, res) => {
+  let botCards = "";
+  ACCOUNTS.forEach(acc => {
+    const user = acc.username;
+    botCards += `
+      <div class="card">
+        <div class="label">${user}</div>
+        <div class="val" id="st-${user}">${botData[user].status}</div>
+        <div class="val" id="bl-${user}" style="color:#10b981">${botData[user].balance}</div>
+        <div class="controls">
+            <button class="btn-red" onclick="toggle('${user}')">Toggle Power</button>
+            <button class="btn-purple" onclick="tpa('${user}')">TPA</button>
+        </div>
+        <div class="log-box" id="log-${user}">${botData[user].logs.join('<br>')}</div>
+      </div>
+    `;
+  });
+
   res.send(`
     <html>
       <head>
-        <title>Theo Control</title>
+        <title>Theo Multi-Bot</title>
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <style>
-          body { background: #020617; color: #f8fafc; font-family: sans-serif; padding: 20px; }
-          .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 20px; }
+          body { background: #020617; color: #f8fafc; font-family: sans-serif; padding: 10px; }
+          .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 15px; }
           .card { background: #1e293b; padding: 15px; border-radius: 12px; border: 1px solid #334155; }
-          .val { font-size: 1.1rem; font-weight: bold; margin-top: 5px; color: #3b82f6; }
-          #logs { background: #000; height: 50vh; overflow-y: auto; padding: 15px; border-radius: 12px; font-family: monospace; font-size: 12px; border: 1px solid #334155; }
-          .controls { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 20px; }
-          input { grid-column: span 2; padding: 12px; border-radius: 8px; background: #0f172a; color: white; border: 1px solid #334155; margin-bottom: 10px; }
-          button { padding: 12px; border-radius: 8px; border: none; font-weight: bold; cursor: pointer; color: white; }
-          .btn-blue { background: #3b82f6; }
+          .label { color: #94a3b8; font-size: 14px; font-weight: bold; border-bottom: 1px solid #334155; padding-bottom: 5px; margin-bottom: 10px; }
+          .val { font-size: 1rem; font-weight: bold; }
+          .log-box { background: #000; height: 200px; overflow-y: auto; font-family: monospace; font-size: 11px; margin-top: 10px; padding: 10px; border-radius: 8px; }
+          .controls { display: flex; gap: 5px; margin-top: 10px; }
+          button { flex: 1; padding: 8px; border-radius: 5px; border: none; color: white; font-weight: bold; cursor: pointer; font-size: 12px; }
           .btn-red { background: #ef4444; }
-          .btn-green { background: #10b981; }
           .btn-purple { background: #8b5cf6; }
         </style>
       </head>
       <body>
-        <div class="grid">
-          <div class="card"><div>Status</div><div class="val" id="st">${botStatus}</div></div>
-          <div class="card"><div>Scoreboard Data</div><div class="val" id="bl" style="color:#10b981">${currentBalance}</div></div>
-        </div>
-        <div id="logs">${webLogs.join('<br>')}</div>
-        <div class="controls">
-          <input type="text" id="m" placeholder="Message..." onkeypress="if(event.key==='Enter')send()">
-          <button class="btn-blue" onclick="send()">Send</button>
-          <button id="pwr" class="${botEnabled ? 'btn-red' : 'btn-green'}" onclick="togglePower()">${botEnabled ? 'SHUTDOWN' : 'START'}</button>
-          <button class="btn-purple" onclick="fetch('/tpa')">TPA to Simon</button>
-          <button class="btn-green" style="background: #64748b" onclick="location.reload()">Refresh Page</button>
-        </div>
+        <div class="grid">${botCards}</div>
         <script>
-          function send(){
-            const i = document.getElementById('m');
-            fetch('/chat?msg='+encodeURIComponent(i.value));
-            i.value='';
-          }
-          function togglePower(){
-            fetch('/toggle').then(() => location.reload());
-          }
-          setInterval(()=> {
-            fetch('/data').then(r=>r.json()).then(d=>{
-              document.getElementById('st').innerText = d.status;
-              document.getElementById('bl').innerText = d.balance;
-              document.getElementById('logs').innerHTML = d.logs.join('<br>');
+          function toggle(u) { fetch('/toggle?user=' + u); }
+          function tpa(u) { fetch('/tpa?user=' + u); }
+          setInterval(() => {
+            fetch('/data').then(r => r.json()).then(data => {
+              for (const user in data) {
+                document.getElementById('st-' + user).innerText = data[user].status;
+                document.getElementById('bl-' + user).innerText = data[user].balance;
+                document.getElementById('log-' + user).innerHTML = data[user].logs.join('<br>');
+              }
             });
           }, 2000);
         </script>
@@ -201,22 +195,25 @@ app.get('/', (req, res) => {
   `);
 });
 
-app.get('/data', (req, res) => res.json({ status: botStatus, balance: currentBalance, logs: webLogs }));
+app.get('/data', (req, res) => res.json(botData));
 app.get('/toggle', (req, res) => {
-  botEnabled = !botEnabled;
-  if (!botEnabled) {
-    botStatus = "PAUSED";
-    if (bot) bot.quit();
-    bot = null;
-    addLog('SYSTEM', 'Bot powered off. You can login now.');
+  const user = req.query.user;
+  botData[user].enabled = !botData[user].enabled;
+  if (!botData[user].enabled) {
+    if (bots[user]) bots[user].quit();
+    delete bots[user];
+    botData[user].status = "PAUSED";
   } else {
-    addLog('SYSTEM', 'Bot starting up...');
-    createBot();
+    const acc = ACCOUNTS.find(a => a.username === user);
+    startBot(acc);
   }
   res.sendStatus(200);
 });
-app.get('/chat', (req, res) => { if(bot) bot.chat(req.query.msg); res.sendStatus(200); });
-app.get('/tpa', (req, res) => { if(bot) bot.chat('/tpa ' + CONFIG.tpaTarget); res.sendStatus(200); });
+app.get('/tpa', (req, res) => {
+  const user = req.query.user;
+  if (bots[user]) bots[user].chat('/tpa ' + SETTINGS.tpaTarget);
+  res.sendStatus(200);
+});
 
 app.listen(PORT);
 
